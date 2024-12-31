@@ -47,7 +47,7 @@ android {
     }
 
     defaultConfig {
-        applicationId 'com.dreautall.waterflyiii'
+        applicationId 'com.liaocl.waterflyiii'
         // You can update the following values to match your application needs.
         // For more information, see: https://docs.flutter.dev/deployment/android#reviewing-the-gradle-build-configuration.
         minSdk = 21
@@ -102,6 +102,7 @@ dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:1.2.2'
     implementation 'androidx.window:window:1.0.0'
     implementation 'androidx.window:window-java:1.0.0'
+    implementation 'org.chromium.net:cronet-embedded:119.6045.31'
 }
 /*
 dependencies {
