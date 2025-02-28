@@ -2,12 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cronet_http/cronet_http.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter_gen/gen_l10n/app_localizations.dart';
-import 'package:http/http.dart' as http;
-import 'package:logging/logging.dart';
-
 import 'package:chopper/chopper.dart'
     show
         Chain,
@@ -17,10 +11,14 @@ import 'package:chopper/chopper.dart'
         Response,
         StripStringExtension,
         applyHeaders;
+import 'package:cronet_http/cronet_http.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
+import 'package:logging/logging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:version/version.dart';
-
 import 'package:waterflyiii/generated/swagger_fireflyiii_api/client_index.dart';
 import 'package:waterflyiii/generated/swagger_fireflyiii_api/firefly_iii.swagger.dart';
 import 'package:waterflyiii/stock.dart';
@@ -241,6 +239,7 @@ class FireflyService with ChangeNotifier {
   final FlutterSecureStorage storage = const FlutterSecureStorage(
     aOptions: AndroidOptions(
       encryptedSharedPreferences: true,
+      resetOnError: true,
     ),
   );
 
@@ -294,9 +293,6 @@ class FireflyService with ChangeNotifier {
     _currentUser = await AuthUser.create(host, apiKey);
     if (_currentUser == null || !hasApi) return false;
 
-    Response<CurrencySingle> currencyInfo = await api.v1CurrenciesDefaultGet();
-    defaultCurrency = currencyInfo.body!.data;
-
     Response<SystemInfo> about = await api.v1AboutGet();
     try {
       String apiVersionStr = about.body?.data?.apiVersion ?? "";
@@ -311,6 +307,14 @@ class FireflyService with ChangeNotifier {
     if (apiVersion == null || apiVersion! < minApiVersion) {
       throw AuthErrorVersionTooLow(minApiVersion);
     }
+
+    late Response<CurrencySingle> currencyInfo;
+    if (apiVersion! >= Version(6, 2, 0)) {
+      currencyInfo = await api.v1CurrenciesNativeGet();
+    } else {
+      currencyInfo = await api.v1CurrenciesDefaultGet();
+    }
+    defaultCurrency = currencyInfo.body!.data;
 
     // Manual API query as the Swagger type doesn't resolve in Flutter :(
     final http.Client client = httpClient;
