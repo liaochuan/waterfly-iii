@@ -5,12 +5,13 @@ import 'dart:io';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:logging/logging.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart' show getTemporaryDirectory;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
+import 'package:waterflyiii/generated/l10n/app_localizations.dart';
 import 'package:waterflyiii/pages/bills.dart';
 
 final Logger log = Logger("Settings");
@@ -20,22 +21,42 @@ class NotificationAppSettings {
     this.appName, {
     this.defaultAccountId,
     this.includeTitle = true,
+    this.autoAdd = false,
+    this.emptyNote = false,
   });
 
   final String appName;
   String? defaultAccountId;
   bool includeTitle = true;
+  bool autoAdd = false;
+  bool emptyNote = false;
 
   NotificationAppSettings.fromJson(Map<String, dynamic> json)
-      : appName = json['appName'],
-        defaultAccountId = json['defaultAccountId'],
-        includeTitle = json['includeTitle'] ?? true;
+    : appName = json['appName'],
+      defaultAccountId = json['defaultAccountId'],
+      includeTitle = json['includeTitle'] ?? true,
+      autoAdd = json['autoAdd'] ?? false,
+      emptyNote = json['emptyNote'] ?? false;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
-        'appName': appName,
-        'defaultAccountId': defaultAccountId,
-        'includeTitle': includeTitle,
-      };
+    'appName': appName,
+    'defaultAccountId': defaultAccountId,
+    'includeTitle': includeTitle,
+    'autoAdd': autoAdd,
+    'emptyNote': emptyNote,
+  };
+}
+
+// in default order
+enum DashboardCards {
+  dailyavg,
+  categories,
+  tags,
+  accounts,
+  netearnings,
+  networth,
+  budgets,
+  bills,
 }
 
 enum BoolSettings {
@@ -45,6 +66,14 @@ enum BoolSettings {
   dynamicColors,
   useServerTime,
   hideTags,
+}
+
+enum TransactionDateFilter {
+  currentMonth,
+  last30Days,
+  currentYear,
+  lastYear,
+  all,
 }
 
 class SettingsBitmask {
@@ -109,6 +138,9 @@ class SettingsProvider with ChangeNotifier {
   static const String settingBillsDefaultSort = "BILLSDEFAULTSORT";
   static const String settingBillsDefaultSortOrder = "BILLSDEFAULTSORTORDER";
   static const String settingsCategoriesSumExcluded = "CAT_SUMEXCLUDED";
+  static const String settingsDashboardOrder = "DASHBOARD_ORDER";
+  static const String settingsDashboardHidden = "DASHBOARD_HIDDEN";
+  static const String settingTransactionDateFilter = "TX_DATE_FILTER";
 
   bool get debug => _loaded ? _boolSettings[BoolSettings.debug] : false;
   bool get lock => _loaded ? _boolSettings[BoolSettings.lock] : false;
@@ -131,6 +163,8 @@ class SettingsProvider with ChangeNotifier {
   bool _loaded = false;
   bool get loaded => _loaded;
 
+  bool _loading = false;
+
   List<String> _notificationApps = <String>[];
   List<String> get notificationApps => _notificationApps;
 
@@ -144,30 +178,122 @@ class SettingsProvider with ChangeNotifier {
   List<String> _categoriesSumExcluded = <String>[];
   List<String> get categoriesSumExcluded => _categoriesSumExcluded;
 
+  List<DashboardCards> _dashboardOrder = <DashboardCards>[];
+  List<DashboardCards> get dashboardOrder => _dashboardOrder;
+
+  final List<DashboardCards> _dashboardHidden = <DashboardCards>[];
+  List<DashboardCards> get dashboardHidden => _dashboardHidden;
+
   late SettingsBitmask _boolSettings;
   SettingsBitmask get boolSettings => _boolSettings;
 
-  Future<void> loadSettings() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    log.config("reading prefs");
+  TransactionDateFilter _transactionDateFilter = TransactionDateFilter.all;
 
-    _boolSettings = SettingsBitmask(prefs.getInt(settingsBitmask) ?? 0);
-    if (!prefs.containsKey(settingsBitmask)) {
+  TransactionDateFilter get transactionDateFilter => _transactionDateFilter;
+
+  Future<void> migrateLegacy(SharedPreferencesAsync prefs) async {
+    log.config("trying to migrate old prefs");
+    final SharedPreferences oldPrefs = await SharedPreferences.getInstance();
+
+    _boolSettings = SettingsBitmask(oldPrefs.getInt(settingsBitmask) ?? 0);
+    if (!oldPrefs.containsKey(settingsBitmask)) {
       // Fallback solution for migration
       log.config("no bitmask saved, trying legacy settings");
-      _boolSettings[BoolSettings.debug] = prefs.getBool(settingDebug) ?? false;
-      _boolSettings[BoolSettings.lock] = prefs.getBool(settingLock) ?? false;
+      _boolSettings[BoolSettings.debug] =
+          oldPrefs.getBool(settingDebug) ?? false;
+      _boolSettings[BoolSettings.lock] = oldPrefs.getBool(settingLock) ?? false;
       _boolSettings[BoolSettings.showFutureTXs] =
-          prefs.getBool(settingShowFutureTXs) ?? false;
+          oldPrefs.getBool(settingShowFutureTXs) ?? false;
       _boolSettings[BoolSettings.dynamicColors] =
-          prefs.getBool(settingDynamicColors) ?? false;
+          oldPrefs.getBool(settingDynamicColors) ?? false;
       _boolSettings[BoolSettings.useServerTime] =
-          prefs.getBool(settingUseServerTime) ?? true;
+          oldPrefs.getBool(settingUseServerTime) ?? true;
       _boolSettings[BoolSettings.hideTags] = false;
     }
+    await prefs.setInt(settingsBitmask, _boolSettings.value);
+
+    final String? theme = oldPrefs.getString(settingTheme);
+    if (theme != null) {
+      await prefs.setString(settingTheme, theme);
+    }
+
+    final String? locale = oldPrefs.getString(settingLocale);
+    if (locale != null) {
+      await prefs.setString(settingLocale, locale);
+    }
+
+    final List<String>? notificationApps = oldPrefs.getStringList(
+      settingNLUsedApps,
+    );
+    if (notificationApps != null) {
+      await prefs.setStringList(settingNLUsedApps, notificationApps);
+    }
+
+    final int? billsLayoutIndex = oldPrefs.getInt(settingBillsDefaultLayout);
+    if (billsLayoutIndex != null) {
+      await prefs.setInt(settingBillsDefaultLayout, billsLayoutIndex);
+    }
+
+    final int? billsSortIndex = oldPrefs.getInt(settingBillsDefaultSort);
+    if (billsSortIndex != null) {
+      await prefs.setInt(settingBillsDefaultSort, billsSortIndex);
+    }
+
+    final int? billsSortOrderIndex = oldPrefs.getInt(
+      settingBillsDefaultSortOrder,
+    );
+    if (billsSortOrderIndex != null) {
+      await prefs.setInt(settingBillsDefaultSortOrder, billsSortOrderIndex);
+    }
+
+    final List<String>? categoriesSumExcluded = oldPrefs.getStringList(
+      settingsCategoriesSumExcluded,
+    );
+    if (categoriesSumExcluded != null) {
+      await prefs.setStringList(
+        settingsCategoriesSumExcluded,
+        categoriesSumExcluded,
+      );
+    }
+
+    // Migrate notification settings
+    final List<String>? knownApps = oldPrefs.getStringList(settingNLKnownApps);
+    if (knownApps != null) {
+      await prefs.setStringList(settingNLKnownApps, knownApps);
+    }
+    final List<String>? usedApps = oldPrefs.getStringList(settingNLUsedApps);
+    if (usedApps != null) {
+      await prefs.setStringList(settingNLUsedApps, usedApps);
+      for (String packageName in usedApps) {
+        final String? json = oldPrefs.getString(
+          "$settingNLAppPrefix$packageName",
+        );
+        if (json == null) {
+          continue;
+        }
+        await prefs.setString("$settingNLAppPrefix$packageName", json);
+      }
+    }
+  }
+
+  Future<void> loadSettings() async {
+    if (_loading) {
+      log.config("already loading prefs, skipping this call");
+      return;
+    }
+    _loading = true;
+
+    final SharedPreferencesAsync prefs = SharedPreferencesAsync();
+    log.config("reading prefs");
+
+    _boolSettings = SettingsBitmask(await prefs.getInt(settingsBitmask) ?? 0);
+    if (!await prefs.containsKey(settingsBitmask)) {
+      await migrateLegacy(prefs);
+    }
+    _boolSettings = SettingsBitmask(await prefs.getInt(settingsBitmask) ?? 0);
     log.config("read bool bitmask $_boolSettings");
 
-    final String theme = prefs.getString(settingTheme) ?? "unset";
+    final String theme = await prefs.getString(settingTheme) ?? "unset";
     log.config("read theme $theme");
     switch (theme) {
       case settingThemeDark:
@@ -182,7 +308,9 @@ class SettingsProvider with ChangeNotifier {
     }
 
     final String? countryCode = Intl.defaultLocale?.split("_").last;
-    final Locale locale = Locale(prefs.getString(settingLocale) ?? "unset");
+    final Locale locale = Locale(
+      await prefs.getString(settingLocale) ?? "unset",
+    );
     log.config("read locale $locale");
     if (S.supportedLocales.contains(locale)) {
       _locale = locale;
@@ -200,27 +328,78 @@ class SettingsProvider with ChangeNotifier {
       Logger.root.level = kDebugMode ? Level.ALL : Level.INFO;
     }
 
-    _notificationApps = prefs.getStringList(settingNLUsedApps) ?? <String>[];
+    _notificationApps =
+        await prefs.getStringList(settingNLUsedApps) ?? <String>[];
 
-    int? billsLayoutIndex = prefs.getInt(settingBillsDefaultLayout);
-    _billsLayout = billsLayoutIndex == null
-        ? BillsLayout.grouped
-        : BillsLayout.values[billsLayoutIndex];
+    final int? billsLayoutIndex = await prefs.getInt(settingBillsDefaultLayout);
+    _billsLayout =
+        billsLayoutIndex == null
+            ? BillsLayout.grouped
+            : BillsLayout.values[billsLayoutIndex];
 
-    int? billsSortIndex = prefs.getInt(settingBillsDefaultSort);
-    _billsSort = billsSortIndex == null
-        ? BillsSort.name
-        : BillsSort.values[billsSortIndex];
+    final int? billsSortIndex = await prefs.getInt(settingBillsDefaultSort);
+    _billsSort =
+        billsSortIndex == null
+            ? BillsSort.name
+            : BillsSort.values[billsSortIndex];
 
-    int? billsSortOrderIndex = prefs.getInt(settingBillsDefaultSortOrder);
-    _billsSortOrder = billsSortOrderIndex == null
-        ? SortingOrder.ascending
-        : SortingOrder.values[billsSortOrderIndex];
+    final int? billsSortOrderIndex = await prefs.getInt(
+      settingBillsDefaultSortOrder,
+    );
+    _billsSortOrder =
+        billsSortOrderIndex == null
+            ? SortingOrder.ascending
+            : SortingOrder.values[billsSortOrderIndex];
 
     _categoriesSumExcluded =
-        prefs.getStringList(settingsCategoriesSumExcluded) ?? <String>[];
+        await prefs.getStringList(settingsCategoriesSumExcluded) ?? <String>[];
 
-    _loaded = true;
+    final List<String> dashboardOrderStr =
+        await prefs.getStringList(settingsDashboardOrder) ?? <String>[];
+    for (String s in dashboardOrderStr) {
+      _dashboardOrder.add(
+        DashboardCards.values.firstWhere((DashboardCards e) => e.name == s),
+      );
+    }
+
+    // Always filter out dupes.
+    _dashboardOrder = dashboardOrder.toSet().toList();
+
+    if (dashboardOrder.isEmpty ||
+        DashboardCards.values.length < dashboardOrder.length) {
+      // No order saved or too many items --> use default order
+      _dashboardOrder = List<DashboardCards>.from(DashboardCards.values);
+    } else if (DashboardCards.values.length > dashboardOrder.length) {
+      // Too few items, maybe a new card was added. Add missing items.
+      for (DashboardCards s in DashboardCards.values) {
+        if (!dashboardOrder.contains(s)) {
+          _dashboardOrder.add(s);
+        }
+      }
+    }
+
+    final List<String>? dashboardHiddenStr = await prefs.getStringList(
+      settingsDashboardHidden,
+    );
+    if (dashboardHiddenStr == null) {
+      // Default hidden charts
+      _dashboardHidden.add(DashboardCards.tags);
+    } else {
+      for (String s in dashboardHiddenStr) {
+        _dashboardHidden.add(
+          DashboardCards.values.firstWhere((DashboardCards e) => e.name == s),
+        );
+      }
+    }
+
+    // Load new transaction date filter setting
+    int? txDateFilterIndex = await prefs.getInt(settingTransactionDateFilter);
+    _transactionDateFilter =
+        txDateFilterIndex == null
+            ? TransactionDateFilter.all
+            : TransactionDateFilter.values[txDateFilterIndex];
+
+    _loaded = _loading = true;
     log.finest(() => "notify SettingsProvider->loadSettings()");
     notifyListeners();
   }
@@ -233,8 +412,10 @@ class SettingsProvider with ChangeNotifier {
     _boolSettings[setting] = value;
 
     () async {
-      SharedPreferences prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(settingsBitmask, _boolSettings.value);
+      await SharedPreferencesAsync().setInt(
+        settingsBitmask,
+        _boolSettings.value,
+      );
 
       log.finest(() => "notify SettingsProvider->_setBool($setting)");
       notifyListeners();
@@ -253,6 +434,10 @@ class SettingsProvider with ChangeNotifier {
       if (debug) {
         Logger.root.level = Level.ALL;
         _debugLogger = Logger.root.onRecord.listen(await DebugLogger().get());
+        final PackageInfo appInfo = await PackageInfo.fromPlatform();
+        log.info(
+          "Enabling debug logs, app ${appInfo.appName} v${appInfo.version}+${appInfo.buildNumber}",
+        );
       } else {
         Logger.root.level = kDebugMode ? Level.ALL : Level.INFO;
         await _debugLogger?.cancel();
@@ -272,16 +457,24 @@ class SettingsProvider with ChangeNotifier {
 
   Future<void> setTheme(ThemeMode theme) async {
     _theme = theme;
-    SharedPreferences prefs = await SharedPreferences.getInstance();
     switch (theme) {
       case ThemeMode.dark:
-        await prefs.setString(settingTheme, settingThemeDark);
+        await SharedPreferencesAsync().setString(
+          settingTheme,
+          settingThemeDark,
+        );
         break;
       case ThemeMode.light:
-        await prefs.setString(settingTheme, settingThemeLight);
+        await SharedPreferencesAsync().setString(
+          settingTheme,
+          settingThemeLight,
+        );
         break;
       case ThemeMode.system:
-        await prefs.setString(settingTheme, settingThemeSystem);
+        await SharedPreferencesAsync().setString(
+          settingTheme,
+          settingThemeSystem,
+        );
     }
 
     log.finest(() => "notify SettingsProvider->setTheme()");
@@ -293,23 +486,25 @@ class SettingsProvider with ChangeNotifier {
       return;
     }
 
-    SharedPreferences prefs = await SharedPreferences.getInstance();
     _locale = Locale(locale.languageCode);
     final String? countryCode = Intl.defaultLocale?.split("_").last;
     Intl.defaultLocale = "${locale.languageCode}_$countryCode";
-    await prefs.setString(settingLocale, locale.languageCode);
+    await SharedPreferencesAsync().setString(
+      settingLocale,
+      locale.languageCode,
+    );
 
     log.finest(() => "notify SettingsProvider->setLocale()");
     notifyListeners();
   }
 
-  Future<bool> notificationAddKnownApp(String packageName) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
+  Future<void> notificationAddKnownApp(String packageName) async {
+    final SharedPreferencesAsync prefs = SharedPreferencesAsync();
     final List<String> apps =
-        prefs.getStringList(settingNLKnownApps) ?? <String>[];
+        await prefs.getStringList(settingNLKnownApps) ?? <String>[];
 
     if (packageName.isEmpty || apps.contains(packageName)) {
-      return false;
+      return;
     }
 
     apps.add(packageName);
@@ -317,9 +512,9 @@ class SettingsProvider with ChangeNotifier {
   }
 
   Future<List<String>> notificationKnownApps({bool filterUsed = false}) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
     final List<String> apps =
-        prefs.getStringList(settingNLKnownApps) ?? <String>[];
+        await SharedPreferencesAsync().getStringList(settingNLKnownApps) ??
+        <String>[];
     if (filterUsed) {
       final List<String> knownApps = await notificationUsedApps();
       return apps
@@ -331,10 +526,9 @@ class SettingsProvider with ChangeNotifier {
   }
 
   Future<bool> notificationAddUsedApp(String packageName) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
+    final SharedPreferencesAsync prefs = SharedPreferencesAsync();
     final List<String> apps =
-        prefs.getStringList(settingNLUsedApps) ?? <String>[];
+        await prefs.getStringList(settingNLUsedApps) ?? <String>[];
 
     if (packageName.isEmpty || apps.contains(packageName)) {
       return false;
@@ -351,9 +545,9 @@ class SettingsProvider with ChangeNotifier {
   }
 
   Future<bool> notificationRemoveUsedApp(String packageName) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
+    final SharedPreferencesAsync prefs = SharedPreferencesAsync();
     final List<String> apps =
-        prefs.getStringList(settingNLUsedApps) ?? <String>[];
+        await prefs.getStringList(settingNLUsedApps) ?? <String>[];
 
     if (packageName.isEmpty || !apps.contains(packageName)) {
       return false;
@@ -371,13 +565,10 @@ class SettingsProvider with ChangeNotifier {
     return true;
   }
 
-  Future<List<String>> notificationUsedApps({bool forceReload = false}) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    if (forceReload) {
-      await prefs.reload();
-    }
+  Future<List<String>> notificationUsedApps() async {
     final List<String> apps =
-        prefs.getStringList(settingNLUsedApps) ?? <String>[];
+        await SharedPreferencesAsync().getStringList(settingNLUsedApps) ??
+        <String>[];
     if (!const ListEquality<String>().equals(apps, _notificationApps)) {
       _notificationApps = apps;
 
@@ -391,9 +582,11 @@ class SettingsProvider with ChangeNotifier {
   Future<NotificationAppSettings> notificationGetAppSettings(
     String packageName,
   ) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
     final String json =
-        prefs.getString("$settingNLAppPrefix$packageName") ?? "";
+        await SharedPreferencesAsync().getString(
+          "$settingNLAppPrefix$packageName",
+        ) ??
+        "";
     try {
       return NotificationAppSettings.fromJson(jsonDecode(json));
     } on FormatException catch (_) {
@@ -405,9 +598,10 @@ class SettingsProvider with ChangeNotifier {
     String packageName,
     NotificationAppSettings settings,
   ) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-        "$settingNLAppPrefix$packageName", jsonEncode(settings));
+    await SharedPreferencesAsync().setString(
+      "$settingNLAppPrefix$packageName",
+      jsonEncode(settings),
+    );
   }
 
   Future<void> setBillsLayout(BillsLayout billsLayout) async {
@@ -415,9 +609,11 @@ class SettingsProvider with ChangeNotifier {
       return;
     }
 
-    SharedPreferences prefs = await SharedPreferences.getInstance();
     _billsLayout = billsLayout;
-    await prefs.setInt(settingBillsDefaultLayout, billsLayout.index);
+    await SharedPreferencesAsync().setInt(
+      settingBillsDefaultLayout,
+      billsLayout.index,
+    );
 
     log.finest(() => "notify SettingsProvider->billsLayout()");
     notifyListeners();
@@ -428,9 +624,11 @@ class SettingsProvider with ChangeNotifier {
       return;
     }
 
-    SharedPreferences prefs = await SharedPreferences.getInstance();
     _billsSort = billsSort;
-    await prefs.setInt(settingBillsDefaultSort, billsSort.index);
+    await SharedPreferencesAsync().setInt(
+      settingBillsDefaultSort,
+      billsSort.index,
+    );
 
     log.finest(() => "notify SettingsProvider->billsSort()");
     notifyListeners();
@@ -441,9 +639,11 @@ class SettingsProvider with ChangeNotifier {
       return;
     }
 
-    SharedPreferences prefs = await SharedPreferences.getInstance();
     _billsSortOrder = sortOrder;
-    await prefs.setInt(settingBillsDefaultSortOrder, sortOrder.index);
+    await SharedPreferencesAsync().setInt(
+      settingBillsDefaultSortOrder,
+      sortOrder.index,
+    );
 
     log.finest(() => "notify SettingsProvider->billsSortOrder()");
     notifyListeners();
@@ -454,9 +654,8 @@ class SettingsProvider with ChangeNotifier {
       return;
     }
 
-    SharedPreferences prefs = await SharedPreferences.getInstance();
     _categoriesSumExcluded.add(categoryId);
-    await prefs.setStringList(
+    await SharedPreferencesAsync().setStringList(
       settingsCategoriesSumExcluded,
       categoriesSumExcluded,
     );
@@ -470,15 +669,85 @@ class SettingsProvider with ChangeNotifier {
       return;
     }
 
-    SharedPreferences prefs = await SharedPreferences.getInstance();
     _categoriesSumExcluded.remove(categoryId);
-    await prefs.setStringList(
+    await SharedPreferencesAsync().setStringList(
       settingsCategoriesSumExcluded,
       categoriesSumExcluded,
     );
 
     log.finest(() => "notify SettingsProvider->categoryRemoveSumExcluded()");
+    notifyListeners();
+  }
 
+  Future<void> setDashboardOrder(List<DashboardCards> order) async {
+    final List<String> orderStr = <String>[];
+    for (DashboardCards e in order) {
+      if (orderStr.contains(e.name)) {
+        continue;
+      }
+      orderStr.add(e.name);
+    }
+
+    _dashboardOrder = order;
+    await SharedPreferencesAsync().setStringList(
+      settingsDashboardOrder,
+      orderStr,
+    );
+
+    log.finest(() => "notify SettingsProvider->setDashboardOrder()");
+    notifyListeners();
+  }
+
+  Future<void> dashboardHideCard(DashboardCards card) async {
+    if (dashboardHidden.contains(card)) {
+      return;
+    }
+    _dashboardHidden.add(card);
+
+    final List<String> hiddenStr = <String>[];
+    for (DashboardCards e in dashboardHidden) {
+      hiddenStr.add(e.name);
+    }
+    await SharedPreferencesAsync().setStringList(
+      settingsDashboardHidden,
+      hiddenStr,
+    );
+
+    log.finest(() => "notify SettingsProvider->dashboardHideCard()");
+    notifyListeners();
+  }
+
+  Future<void> dashboardShowCard(DashboardCards card) async {
+    if (!dashboardHidden.contains(card)) {
+      return;
+    }
+    _dashboardHidden.remove(card);
+
+    final List<String> hiddenStr = <String>[];
+    for (DashboardCards e in dashboardHidden) {
+      hiddenStr.add(e.name);
+    }
+    await SharedPreferencesAsync().setStringList(
+      settingsDashboardHidden,
+      hiddenStr,
+    );
+
+    log.finest(() => "notify SettingsProvider->dashboardShowCard()");
+    notifyListeners();
+  }
+
+  Future<void> setTransactionDateFilter(TransactionDateFilter filter) async {
+    if (filter == _transactionDateFilter) {
+      return;
+    }
+
+    _transactionDateFilter = filter;
+    await SharedPreferencesAsync().setInt(
+      settingTransactionDateFilter,
+      filter.index,
+    );
+
+    log.finest(() => "notify SettingsProvider->setTransactionDateFilter()");
     notifyListeners();
   }
 }
@@ -515,7 +784,7 @@ class DebugLogger {
   }
 
   Future<void> destroy() async {
-    File file = File(await _getPath());
+    final File file = File(await _getPath());
     if (await file.exists()) {
       file.deleteSync();
     }

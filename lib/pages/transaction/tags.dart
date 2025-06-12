@@ -1,13 +1,11 @@
+import 'package:chopper/chopper.dart' show Response;
 import 'package:flutter/material.dart';
-import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 import 'package:logging/logging.dart';
 import 'package:provider/provider.dart';
-
-import 'package:chopper/chopper.dart' show Response;
-
 import 'package:waterflyiii/animations.dart';
 import 'package:waterflyiii/auth.dart';
 import 'package:waterflyiii/extensions.dart';
+import 'package:waterflyiii/generated/l10n/app_localizations.dart';
 import 'package:waterflyiii/generated/swagger_fireflyiii_api/firefly_iii.swagger.dart';
 
 class Tags {
@@ -43,11 +41,14 @@ class TransactionTags extends StatefulWidget {
     required this.textController,
     required this.tagsController,
     this.enableAdd = true,
+    this.interactable = true,
   });
 
   final TextEditingController textController;
   final Tags tagsController;
   final bool enableAdd;
+
+  final bool interactable;
 
   @override
   State<TransactionTags> createState() => _TransactionTagsState();
@@ -59,12 +60,13 @@ class _TransactionTagsState extends State<TransactionTags> {
   @override
   Widget build(BuildContext context) {
     log.finest(() => "build()");
-    FocusNode disabledFocus = AlwaysDisabledFocusNode();
+    final FocusNode disabledFocus = AlwaysDisabledFocusNode();
     return Row(
       children: <Widget>[
         Expanded(
           child: AnimatedHeight(
             child: TextFormField(
+              enabled: widget.interactable,
               controller: widget.textController,
               maxLines: null,
               readOnly: true,
@@ -73,39 +75,46 @@ class _TransactionTagsState extends State<TransactionTags> {
                 border: const OutlineInputBorder(),
                 labelText: S.of(context).transactionFormLabelTags,
                 icon: const Icon(Icons.bookmarks),
-                prefixIcon: widget.tagsController.tags.isNotEmpty
-                    ? Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Wrap(
-                          spacing: 5,
-                          runSpacing: 5,
-                          children: widget.tagsController.tags
-                              .map(
-                                (String e) => InputChip(
-                                  label: Text(e),
-                                  onDeleted: () {
-                                    setState(() {
-                                      widget.tagsController.remove(e);
-                                      widget.textController.text = (widget
-                                              .tagsController.tags.isNotEmpty)
-                                          ? " "
-                                          : "";
-                                    });
-                                  },
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      )
-                    : null,
+                filled: !widget.interactable,
+                prefixIcon:
+                    widget.tagsController.tags.isNotEmpty
+                        ? Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Wrap(
+                            spacing: 5,
+                            runSpacing: 5,
+                            children:
+                                widget.tagsController.tags
+                                    .map(
+                                      (String e) => InputChip(
+                                        label: Text(e),
+                                        onDeleted: () {
+                                          setState(() {
+                                            widget.tagsController.remove(e);
+                                            widget.textController.text =
+                                                (widget
+                                                        .tagsController
+                                                        .tags
+                                                        .isNotEmpty)
+                                                    ? " "
+                                                    : "";
+                                          });
+                                        },
+                                      ),
+                                    )
+                                    .toList(),
+                          ),
+                        )
+                        : null,
               ),
               onTap: () async {
-                List<String>? tags = await showDialog<List<String>>(
+                final List<String>? tags = await showDialog<List<String>>(
                   context: context,
-                  builder: (BuildContext context) => TagDialog(
-                    selectedTags: widget.tagsController.tags,
-                    enableAdd: widget.enableAdd,
-                  ),
+                  builder:
+                      (BuildContext context) => TagDialog(
+                        selectedTags: widget.tagsController.tags,
+                        enableAdd: widget.enableAdd,
+                      ),
                 );
                 // Cancelled
                 if (tags == null) {
@@ -119,7 +128,7 @@ class _TransactionTagsState extends State<TransactionTags> {
               },
             ),
           ),
-        )
+        ),
       ],
     );
   }
@@ -160,7 +169,7 @@ class _TagDialogState extends State<TagDialog> {
 
   Future<List<String>>? _getTags() async {
     final FireflyIii api = context.read<FireflyService>().api;
-    List<String> tags = <String>[];
+    final List<String> tags = <String>[];
     late Response<TagArray> response;
     int pageNumber = 0;
 
@@ -221,21 +230,23 @@ class _TagDialogState extends State<TagDialog> {
           onPressed: () {
             Navigator.pop(context, _newSelectedTags);
           },
-        )
+        ),
       ],
       content: FutureBuilder<List<String>>(
         future: _getTags(),
         builder: (BuildContext context, AsyncSnapshot<List<String>> snapshot) {
           if (snapshot.hasData) {
-            List<String> allTags =
+            final List<String> allTags =
                 <String>{...snapshot.data!, ..._newSelectedTags}.toList();
             bool showAddTag = true;
 
             return StatefulBuilder(
               builder: (BuildContext context, StateSetter setAlertState) {
-                showAddTag = _newTagTextController.text.isNotEmpty &&
-                    !_newSelectedTags
-                        .containsIgnoreCase(_newTagTextController.text);
+                showAddTag =
+                    _newTagTextController.text.isNotEmpty &&
+                    !_newSelectedTags.containsIgnoreCase(
+                      _newTagTextController.text,
+                    );
                 allTags.sort((String a, String b) {
                   if (_newSelectedTags.containsIgnoreCase(a) &&
                       !_newSelectedTags.containsIgnoreCase(b)) {
@@ -247,54 +258,66 @@ class _TagDialogState extends State<TagDialog> {
                     return a.toLowerCase().compareTo(b.toLowerCase());
                   }
                 });
-                List<Widget> child = <Widget>[
+                final List<Widget> child = <Widget>[
                   TextField(
                     controller: _newTagTextController,
                     onChanged: (String value) {
                       setAlertState(() {});
                     },
-                    onSubmitted: (String value) => widget.enableAdd
-                        ? _newTagSubmitted(setAlertState, allTags, value)
-                        : null,
+                    onSubmitted:
+                        (String value) =>
+                            widget.enableAdd
+                                ? _newTagSubmitted(
+                                  setAlertState,
+                                  allTags,
+                                  value,
+                                )
+                                : null,
                     decoration: InputDecoration(
-                        hintText: widget.enableAdd
-                            ? S.of(context).transactionDialogTagsHint
-                            : S.of(context).transactionDialogTagsTitle,
-                        icon: const Icon(Icons.bookmark_add),
-                        suffixIcon: (showAddTag && widget.enableAdd)
-                            ? Padding(
-                                padding:
-                                    const EdgeInsetsDirectional.only(end: 12.0),
+                      hintText:
+                          widget.enableAdd
+                              ? S.of(context).transactionDialogTagsHint
+                              : S.of(context).transactionDialogTagsTitle,
+                      icon: const Icon(Icons.bookmark_add),
+                      suffixIcon:
+                          (showAddTag && widget.enableAdd)
+                              ? Padding(
+                                padding: const EdgeInsetsDirectional.only(
+                                  end: 12.0,
+                                ),
                                 child: IconButton(
                                   icon: const Icon(Icons.add),
-                                  onPressed: () => _newTagSubmitted(
-                                    setAlertState,
-                                    allTags,
-                                    _newTagTextController.text,
-                                  ),
+                                  onPressed:
+                                      () => _newTagSubmitted(
+                                        setAlertState,
+                                        allTags,
+                                        _newTagTextController.text,
+                                      ),
                                   tooltip:
                                       S.of(context).transactionDialogTagsAdd,
                                 ),
                               )
-                            : null),
+                              : null,
+                    ),
                   ),
                   const Divider(),
                 ];
                 final Iterable<String> filteredTags = allTags.where(
-                    (String t) =>
-                        _newTagTextController.text.isEmpty ||
-                        (_newTagTextController.text.isNotEmpty &&
-                            t.containsIgnoreCase(_newTagTextController.text)));
+                  (String t) =>
+                      _newTagTextController.text.isEmpty ||
+                      (_newTagTextController.text.isNotEmpty &&
+                          t.containsIgnoreCase(_newTagTextController.text)),
+                );
                 for (String tag in filteredTags) {
                   if (_newTagTextController.text.isNotEmpty &&
                       !tag.containsIgnoreCase(_newTagTextController.text)) {
                     continue;
                   }
-                  child.add(CheckboxListTile(
-                    value: _newSelectedTags.containsIgnoreCase(tag),
-                    onChanged: (bool? selected) {
-                      setAlertState(
-                        () {
+                  child.add(
+                    CheckboxListTile(
+                      value: _newSelectedTags.containsIgnoreCase(tag),
+                      onChanged: (bool? selected) {
+                        setAlertState(() {
                           if ((selected == null || !selected) &&
                               _newSelectedTags.containsIgnoreCase(tag)) {
                             _newSelectedTags.remove(tag);
@@ -302,17 +325,19 @@ class _TagDialogState extends State<TagDialog> {
                               !_newSelectedTags.containsIgnoreCase(tag)) {
                             _newSelectedTags.add(tag);
                             if (filteredTags
-                                .where((String t) =>
-                                    !_newSelectedTags.containsIgnoreCase(t))
+                                .where(
+                                  (String t) =>
+                                      !_newSelectedTags.containsIgnoreCase(t),
+                                )
                                 .isEmpty) {
                               _newTagTextController.text = "";
                             }
                           }
-                        },
-                      );
-                    },
-                    title: Text(tag),
-                  ));
+                        });
+                      },
+                      title: Text(tag),
+                    ),
+                  );
                   child.add(const Divider());
                 }
 
@@ -328,13 +353,14 @@ class _TagDialogState extends State<TagDialog> {
             );
           } else if (snapshot.hasError) {
             log.severe(
-                "error getting tags", snapshot.error, snapshot.stackTrace);
+              "error getting tags",
+              snapshot.error,
+              snapshot.stackTrace,
+            );
             Navigator.pop(context);
             return const CircularProgressIndicator();
           } else {
-            return const Center(
-              child: CircularProgressIndicator(),
-            );
+            return const Center(child: CircularProgressIndicator());
           }
         },
       ),
